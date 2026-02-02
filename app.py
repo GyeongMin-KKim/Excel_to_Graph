@@ -9,7 +9,7 @@ import openpyxl
 # --------------------------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="데이터 분석기")
 
-st.title("📈 엑셀 데이터 시각화 (범위 조절 Ver.)")
+st.title("📈 엑셀 데이터 시각화 (범위 필터링 Ver.)")
 uploaded_file = st.file_uploader("엑셀/CSV 파일을 여기에 드래그하세요", type=['xlsx', 'xls', 'csv'])
 
 # --------------------------------------------------------------------------------
@@ -31,21 +31,38 @@ if uploaded_file is not None:
         
         df_plot['PV'] = pd.to_numeric(df_plot['PV'], errors='coerce')
         df_plot['SP'] = pd.to_numeric(df_plot['SP'], errors='coerce')
+        
+        # [중요] 사용자가 지정한 정상 범위 (-100 ~ 220)
+        VALID_MIN_TEMP = -100
+        VALID_MAX_TEMP = 220
+
+        # -999 같은 에러 코드는 일단 NaN으로 처리
         df_plot.replace(-999, np.nan, inplace=True)
 
         # -----------------------------------------------------------------------
-        # 1. 사이클 기준 온도 (완전 자동 - 입력창 삭제됨)
+        # [핵심] 1. 사이클 기준 온도 자동 계산
         # -----------------------------------------------------------------------
-        sp_max = df_plot['SP'].max()
-        sp_min = df_plot['SP'].min()
-        
-        if pd.isna(sp_max) or pd.isna(sp_min):
-            threshold = 50
-        else:
-            threshold = int((sp_max + sp_min) / 2)
-            if (sp_max - sp_min) < 10: threshold = 50
+        # SP 중에서 "정상 범위(-100 ~ 220)" 안에 들어오는 값만 골라서 계산에 사용
+        valid_sp_condition = (df_plot['SP'] >= VALID_MIN_TEMP) & (df_plot['SP'] <= VALID_MAX_TEMP)
+        valid_sp_data = df_plot[valid_sp_condition]['SP']
 
+        if len(valid_sp_data) > 0:
+            sp_max = valid_sp_data.max()
+            sp_min = valid_sp_data.min()
+            
+            # 정상적인 값들의 중간값으로 설정
+            threshold = int((sp_max + sp_min) / 2)
+            
+            # 만약 편차가 너무 작으면 기본값 50으로 설정
+            if (sp_max - sp_min) < 10: 
+                threshold = 50
+        else:
+            # 정상 범위 데이터가 하나도 없으면 기본값
+            threshold = 50
+
+        # -----------------------------------------------------------------------
         # 사이클 감지 로직
+        # -----------------------------------------------------------------------
         is_high = df_plot['SP'] > threshold
         cycle_starts = df_plot[is_high & (~is_high.shift(1).fillna(False))]
         
@@ -62,18 +79,22 @@ if uploaded_file is not None:
         total_cycles = len(cycle_times_min)
 
         # -----------------------------------------------------------------------
-        # 2. 사이드바 설정 (여기에 Y축 조절 기능 추가!)
+        # 2. 사이드바 설정 (Y축 조절 기능)
         # -----------------------------------------------------------------------
         st.sidebar.header("⚙️ 그래프 설정")
 
-        # [NEW] Y축(온도) 범위 자동 계산
-        ERROR_CUTOFF = -200
-        valid_pv = df_plot[df_plot['PV'] > ERROR_CUTOFF]['PV']
-        valid_sp = df_plot[df_plot['SP'] > ERROR_CUTOFF]['SP']
+        # Y축(온도) 범위 자동 계산 시에도 "정상 범위" 데이터만 참고함
+        valid_pv_condition = (df_plot['PV'] >= VALID_MIN_TEMP) & (df_plot['PV'] <= VALID_MAX_TEMP)
         
-        if len(valid_pv) > 0:
-            default_min = int(min(valid_pv.min(), valid_sp.min()) - 10)
-            default_max = int(max(valid_pv.max(), valid_sp.max()) + 10)
+        valid_pv = df_plot[valid_pv_condition]['PV']
+        valid_sp = df_plot[valid_sp_condition]['SP']
+        
+        # 기본적으로 보여줄 Y축 범위 계산
+        if len(valid_pv) > 0 and len(valid_sp) > 0:
+            global_min = min(valid_pv.min(), valid_sp.min())
+            global_max = max(valid_pv.max(), valid_sp.max())
+            default_min = int(global_min - 10)
+            default_max = int(global_max + 10)
         else:
             default_min, default_max = -50, 200
 
@@ -85,7 +106,7 @@ if uploaded_file is not None:
 
         st.sidebar.markdown("---") 
 
-        # 시간 눈금 입력 (기존 기능 유지)
+        # 시간 눈금 입력
         st.sidebar.subheader("⏱️ 시간 눈금 (X축)")
         time_tick_input = st.sidebar.number_input(
             "시간 간격 (분)", 
@@ -94,7 +115,8 @@ if uploaded_file is not None:
         )
         
         st.sidebar.markdown("---")
-        st.sidebar.info(f"🤖 사이클 분석은 자동으로 수행되었습니다.\n(기준: {threshold}℃ / 발견: {total_cycles}개)")
+        # 분석 결과 정보 표시
+        st.sidebar.info(f"🤖 자동 분석 결과\n\n- 정상 범위: **-100℃ ~ 220℃**\n- 계산된 기준: **{threshold}℃**\n- 발견된 사이클: **{total_cycles}개**")
 
         # -----------------------------------------------------------------------
         # 3. 그래프 그리기
@@ -103,6 +125,10 @@ if uploaded_file is not None:
         # 사이클 선/글자 준비
         all_shapes = []
         all_annots = []
+        
+        # 글자 위치 (Top보다 살짝 아래)
+        text_y_pos = y_max_input - (y_max_input - y_min_input) * 0.1
+
         for i in range(total_cycles):
             start_min = cycle_times_min[i]
             all_shapes.append(dict(type="line", x0=start_min, x1=start_min, y0=0, y1=1, xref="x", yref="paper", line=dict(color="Gray", width=1, dash="dot")))
@@ -110,7 +136,7 @@ if uploaded_file is not None:
             if i < total_cycles - 1: end_min = cycle_times_min[i+1]
             else: end_min = df_plot['Elapsed_Min'].iloc[-1]
             
-            all_annots.append(dict(x=start_min + (end_min - start_min)/2, y=y_max_input - (y_max_input-y_min_input)*0.1, text=f"<b>Cycle {i+1}</b>", showarrow=False, font=dict(size=14, color="blue"), bgcolor="rgba(255, 255, 255, 0.6)"))
+            all_annots.append(dict(x=start_min + (end_min - start_min)/2, y=text_y_pos, text=f"<b>Cycle {i+1}</b>", showarrow=False, font=dict(size=14, color="blue"), bgcolor="rgba(255, 255, 255, 0.6)"))
 
         # 필터링 함수
         def get_filtered_layout(step):
@@ -141,6 +167,8 @@ if uploaded_file is not None:
 
         # 그래프 생성
         fig = go.Figure()
+        
+        # PV/SP 그리기 (여기서는 전체 데이터를 다 그립니다. 에러값이 있다면 그래프 밖으로 나가서 안 보일 뿐입니다)
         fig.add_trace(go.Scatter(x=df_plot['Elapsed_Min'], y=df_plot['PV'], name='PV', hovertemplate="%{x:.1f}분<br>%{y}도"))
         fig.add_trace(go.Scatter(x=df_plot['Elapsed_Min'], y=df_plot['SP'], name='SP', line=dict(dash='dash'), hoverinfo='skip'))
 
@@ -152,7 +180,7 @@ if uploaded_file is not None:
             shapes=init_shapes, 
             annotations=init_annots,
             
-            # [핵심] 사용자가 입력한 Min/Max 적용
+            # [핵심] Y축 범위 설정 (사용자 입력값 반영)
             yaxis=dict(range=[y_min_input, y_max_input], tickmode='linear', dtick=10),
             
             xaxis=dict(title="경과 시간 (분)", ticksuffix="분", tick0=0, dtick=dtick_value, rangeslider=dict(visible=True, thickness=0.05)),
