@@ -39,9 +39,6 @@ if uploaded_file is not None:
         # -999 같은 에러 코드는 일단 NaN으로 처리
         df_plot.replace(-999, np.nan, inplace=True)
 
-        # -----------------------------------------------------------------------
-        # [핵심] 1. 사이클 기준 온도 자동 계산
-        # -----------------------------------------------------------------------
         # SP 중에서 "정상 범위(-100 ~ 220)" 안에 들어오는 값만 골라서 계산에 사용
         valid_sp_condition = (df_plot['SP'] >= VALID_MIN_TEMP) & (df_plot['SP'] <= VALID_MAX_TEMP)
         valid_sp_data = df_plot[valid_sp_condition]['SP']
@@ -49,20 +46,13 @@ if uploaded_file is not None:
         if len(valid_sp_data) > 0:
             sp_max = valid_sp_data.max()
             sp_min = valid_sp_data.min()
-            
-            # 정상적인 값들의 중간값으로 설정
             threshold = int((sp_max + sp_min) / 2)
-            
-            # 만약 편차가 너무 작으면 기본값 50으로 설정
             if (sp_max - sp_min) < 10: 
                 threshold = 50
         else:
-            # 정상 범위 데이터가 하나도 없으면 기본값
             threshold = 50
 
-        # -----------------------------------------------------------------------
         # 사이클 감지 로직
-        # -----------------------------------------------------------------------
         is_high = df_plot['SP'] > threshold
         cycle_starts = df_plot[is_high & (~is_high.shift(1).fillna(False))]
         
@@ -83,13 +73,10 @@ if uploaded_file is not None:
         # -----------------------------------------------------------------------
         st.sidebar.header("⚙️ 그래프 설정")
 
-        # Y축(온도) 범위 자동 계산 시에도 "정상 범위" 데이터만 참고함
         valid_pv_condition = (df_plot['PV'] >= VALID_MIN_TEMP) & (df_plot['PV'] <= VALID_MAX_TEMP)
-        
         valid_pv = df_plot[valid_pv_condition]['PV']
         valid_sp = df_plot[valid_sp_condition]['SP']
         
-        # 기본적으로 보여줄 Y축 범위 계산
         if len(valid_pv) > 0 and len(valid_sp) > 0:
             global_min = min(valid_pv.min(), valid_sp.min())
             global_max = max(valid_pv.max(), valid_sp.max())
@@ -99,14 +86,11 @@ if uploaded_file is not None:
             default_min, default_max = -50, 200
 
         st.sidebar.subheader("🌡️ 온도 범위 (Y축)")
-        
-        # 사용자가 입력할 수 있는 Y축 최소/최대
         y_min_input = st.sidebar.number_input("최소 온도 (Bottom)", value=default_min, step=10)
         y_max_input = st.sidebar.number_input("최대 온도 (Top)", value=default_max, step=10)
 
         st.sidebar.markdown("---") 
 
-        # 시간 눈금 입력
         st.sidebar.subheader("⏱️ 시간 눈금 (X축)")
         time_tick_input = st.sidebar.number_input(
             "시간 간격 (분)", 
@@ -115,32 +99,46 @@ if uploaded_file is not None:
         )
         
         st.sidebar.markdown("---")
-        # 분석 결과 정보 표시
         st.sidebar.info(f"🤖 자동 분석 결과\n\n- 정상 범위: **-100℃ ~ 220℃**\n- 계산된 기준: **{threshold}℃**\n- 발견된 사이클: **{total_cycles}개**")
 
         # -----------------------------------------------------------------------
-        # 3. 그래프 그리기
+        # 3. 그래프 그리기 (수정 포인트: 배경색 로직 추가)
         # -----------------------------------------------------------------------
-        
-        # 사이클 선/글자 준비
         all_shapes = []
         all_annots = []
         
-        # 글자 위치 (Top보다 살짝 아래)
         text_y_pos = y_max_input - (y_max_input - y_min_input) * 0.1
 
         for i in range(total_cycles):
             start_min = cycle_times_min[i]
-            all_shapes.append(dict(type="line", x0=start_min, x1=start_min, y0=0, y1=1, xref="x", yref="paper", line=dict(color="Gray", width=1, dash="dot")))
-            
             if i < total_cycles - 1: end_min = cycle_times_min[i+1]
             else: end_min = df_plot['Elapsed_Min'].iloc[-1]
-            
-            all_annots.append(dict(x=start_min + (end_min - start_min)/2, y=text_y_pos, text=f"<b>Cycle {i+1}</b>", showarrow=False, font=dict(size=14, color="blue"), bgcolor="rgba(255, 255, 255, 0.6)"))
 
-        # 필터링 함수
+            # [핵심] 짝수 번째 사이클에만 지이이인짜 연한 회색 배경 추가
+            if (i + 1) % 2 == 0:
+                all_shapes.append(dict(
+                    type="rect", x0=start_min, x1=end_min, y0=0, y1=1,
+                    xref="x", yref="paper", fillcolor="rgba(200, 200, 200, 0.1)",
+                    line_width=0, layer="below"
+                ))
+
+            # 사이클 구분 점선 (Gray)
+            all_shapes.append(dict(
+                type="line", x0=start_min, x1=start_min, y0=0, y1=1, 
+                xref="x", yref="paper", line=dict(color="rgba(128, 128, 128, 0.5)", width=1, dash="dot")
+            ))
+            
+            all_annots.append(dict(
+                x=start_min + (end_min - start_min)/2, y=text_y_pos, 
+                text=f"<b>Cycle {i+1}</b>", showarrow=False, 
+                font=dict(size=14, color="blue"), bgcolor="rgba(255, 255, 255, 0.6)"
+            ))
+
+        # 필터링 함수 (모든 기존 기능 유지)
         def get_filtered_layout(step):
-            filtered_shapes = [s for i, s in enumerate(all_shapes) if (i % step == 0)]
+            # 배경(rect)은 항상 다 보여주고, 선(line)과 글자(annot)만 step에 따라 필터링
+            rects = [s for s in all_shapes if s['type'] == 'rect']
+            lines = [s for i, s in enumerate([s for s in all_shapes if s['type'] == 'line']) if (i % step == 0)]
             filtered_annots = [a for i, a in enumerate(all_annots) if (i % step == 0)]
             
             header_annotations = [
@@ -148,9 +146,9 @@ if uploaded_file is not None:
                 dict(x=0.35, y=1.12, xref="paper", yref="paper", text="<b>2. 온도 눈금</b>", showarrow=False, xanchor="left"),
                 dict(x=0.7, y=1.12, xref="paper", yref="paper", text="<b>3. 사이클 간격</b>", showarrow=False, xanchor="left")
             ]
-            return filtered_shapes, header_annotations + filtered_annots
+            return rects + lines, header_annotations + filtered_annots
 
-        # 버튼 생성
+        # 버튼 생성 (기존 유지)
         zoom_buttons = [dict(method="relayout", label="전체 보기", args=[{"xaxis.autorange": True, "title.text": "전체 그래프"}])]
         for i in range(total_cycles):
             s = cycle_times_min[i]
@@ -163,12 +161,10 @@ if uploaded_file is not None:
         for step in [1, 5, 10, 20, 50, 100]:
             shapes_f, annots_f = get_filtered_layout(step)
             step_buttons.append(dict(method="relayout", label=f"{step}개씩", args=[{"shapes": shapes_f, "annotations": annots_f}]))
-        step_buttons.append(dict(method="relayout", label="숨기기", args=[{"shapes": [], "annotations": get_filtered_layout(1)[1][:3]}]))
+        step_buttons.append(dict(method="relayout", label="숨기기", args=[{"shapes": [s for s in all_shapes if s['type'] == 'rect'], "annotations": get_filtered_layout(1)[1][:3]}]))
 
         # 그래프 생성
         fig = go.Figure()
-        
-        # PV/SP 그리기 (여기서는 전체 데이터를 다 그립니다. 에러값이 있다면 그래프 밖으로 나가서 안 보일 뿐입니다)
         fig.add_trace(go.Scatter(x=df_plot['Elapsed_Min'], y=df_plot['PV'], name='PV', hovertemplate="%{x:.1f}분<br>%{y}도"))
         fig.add_trace(go.Scatter(x=df_plot['Elapsed_Min'], y=df_plot['SP'], name='SP', line=dict(dash='dash'), hoverinfo='skip'))
 
@@ -179,10 +175,7 @@ if uploaded_file is not None:
             title=dict(text=f"결과 그래프: {uploaded_file.name}", y=0.98, x=0.5, xanchor='center', yanchor='top'),
             shapes=init_shapes, 
             annotations=init_annots,
-            
-            # [핵심] Y축 범위 설정 (사용자 입력값 반영)
             yaxis=dict(range=[y_min_input, y_max_input], tickmode='linear', dtick=10),
-            
             xaxis=dict(title="경과 시간 (분)", ticksuffix="분", tick0=0, dtick=dtick_value, rangeslider=dict(visible=True, thickness=0.05)),
             template='plotly_white', hovermode='x unified', height=700, margin=dict(t=160),
             updatemenus=[
