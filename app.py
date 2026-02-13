@@ -67,7 +67,7 @@ if uploaded_file is not None:
         st.sidebar.header("⚙️ 그래프 설정")
 
         # [추가] 사이클 구간 빠른 이동
-        st.sidebar.subheader("🔍 사이클 구간 바로가기")
+        st.sidebar.subheader("🔍 사이클 구간")
         col1, col2 = st.sidebar.columns(2)
         with col1:
             start_cyc = st.number_input("시작 사이클", min_value=1, max_value=total_cycles, value=1)
@@ -183,3 +183,4 @@ if uploaded_file is not None:
         st.error(f"오류가 발생했습니다: {e}")
 else:
     st.info("👆 데이터를 분석하려면 엑셀 파일을 업로드해주세요.")
+
