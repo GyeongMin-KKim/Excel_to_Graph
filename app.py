@@ -32,6 +32,7 @@ if uploaded_file is not None:
         df_plot['PV'] = pd.to_numeric(df_plot['PV'], errors='coerce')
         df_plot['SP'] = pd.to_numeric(df_plot['SP'], errors='coerce')
         
+        # 정상 범위 설정
         VALID_MIN_TEMP = -100
         VALID_MAX_TEMP = 220
         df_plot.replace(-999, np.nan, inplace=True)
@@ -47,6 +48,7 @@ if uploaded_file is not None:
         else:
             threshold = 50
 
+        # 사이클 감지 로직
         is_high = df_plot['SP'] > threshold
         cycle_starts = df_plot[is_high & (~is_high.shift(1).fillna(False))]
         
@@ -62,11 +64,11 @@ if uploaded_file is not None:
         total_cycles = len(cycle_times_min)
 
         # -----------------------------------------------------------------------
-        # 2. 사이드바 설정 (구간 설정 기능 추가)
+        # 3. 사이드바 설정 (구간 설정 및 Y축 조절)
         # -----------------------------------------------------------------------
         st.sidebar.header("⚙️ 그래프 설정")
 
-        # [추가] 사이클 구간 빠른 이동
+        # [기능] 사이클 구간 빠른 이동
         st.sidebar.subheader("🔍 사이클 구간 바로가기")
         col1, col2 = st.sidebar.columns(2)
         with col1:
@@ -76,20 +78,14 @@ if uploaded_file is not None:
 
         # X축 범위 계산
         x_min_range = cycle_times_min[start_cyc-1]
-        if end_cyc < total_cycles:
-            x_max_range = cycle_times_min[end_cyc]
-        else:
-            x_max_range = df_plot['Elapsed_Min'].max()
+        x_max_range = cycle_times_min[end_cyc] if end_cyc < total_cycles else df_plot['Elapsed_Min'].max()
 
         st.sidebar.markdown("---")
         
-        valid_pv_condition = (df_plot['PV'] >= VALID_MIN_TEMP) & (df_plot['PV'] <= VALID_MAX_TEMP)
-        valid_pv = df_plot[valid_pv_condition]['PV']
-        valid_sp = df_plot[valid_sp_condition]['SP']
-        
-        if len(valid_pv) > 0 and len(valid_sp) > 0:
-            global_min, global_max = min(valid_pv.min(), valid_sp.min()), max(valid_pv.max(), valid_sp.max())
-            default_min, default_max = int(global_min - 10), int(global_max + 10)
+        # Y축 범위 자동 계산
+        valid_pv = df_plot[(df_plot['PV'] >= VALID_MIN_TEMP) & (df_plot['PV'] <= VALID_MAX_TEMP)]['PV']
+        if len(valid_pv) > 0:
+            default_min, default_max = int(valid_pv.min() - 10), int(valid_pv.max() + 10)
         else:
             default_min, default_max = -50, 200
 
@@ -100,10 +96,10 @@ if uploaded_file is not None:
         st.sidebar.subheader("⏱️ 시간 눈금 (X축)")
         time_tick_input = st.sidebar.number_input("시간 간격 (분)", min_value=0, value=30, step=10)
         
-        st.sidebar.info(f"🤖 자동 분석 결과\n\n- 정상 범위: **-100℃ ~ 220℃**\n- 발견된 사이클: **{total_cycles}개**")
+        st.sidebar.info(f"🤖 자동 분석 결과\n- 발견된 사이클: **{total_cycles}개**")
 
         # -----------------------------------------------------------------------
-        # 3. 그래프 데이터 구성
+        # 4. 그래프 요소 생성 (배경 및 사이클 구분선)
         # -----------------------------------------------------------------------
         all_shapes = []
         all_annots = []
@@ -113,24 +109,34 @@ if uploaded_file is not None:
             s_min = cycle_times_min[i]
             e_min = cycle_times_min[i+1] if i < total_cycles - 1 else df_plot['Elapsed_Min'].iloc[-1]
 
+            # [해결] 짝수 사이클 배경 (검은 테두리 제거 버전)
             if (i + 1) % 2 == 0:
                 all_shapes.append(dict(
                     type="rect", x0=s_min, x1=e_min, y0=0, y1=1,
-                    xref="x", yref="paper", fillcolor="rgba(180, 180, 180, 0.25)",
-                    line_width=0, layer="below"
+                    xref="x", yref="paper", 
+                    fillcolor="rgba(180, 180, 180, 0.25)", # 배경색 농도 유지
+                    line=dict(width=0),                   # 테두리 두께 0 명시
+                    line_width=0, 
+                    layer="below"
                 ))
 
+            # 사이클 구분 수직 점선
             all_shapes.append(dict(
                 type="line", x0=s_min, x1=s_min, y0=0, y1=1, 
-                xref="x", yref="paper", line=dict(color="rgba(100, 100, 100, 0.6)", width=1, dash="dot")
+                xref="x", yref="paper", 
+                line=dict(color="rgba(100, 100, 100, 0.5)", width=1, dash="dot")
             ))
             
+            # 사이클 번호 라벨
             all_annots.append(dict(
                 x=s_min + (e_min - s_min)/2, y=text_y_pos, 
                 text=f"<b>Cycle {i+1}</b>", showarrow=False, 
                 font=dict(size=14, color="blue"), bgcolor="rgba(255, 255, 255, 0.6)"
             ))
 
+        # -----------------------------------------------------------------------
+        # 5. 드롭다운 필터링 및 버튼 설정
+        # -----------------------------------------------------------------------
         def get_filtered_layout(step):
             rects = [s for s in all_shapes if s['type'] == 'rect']
             lines = [s for i, s in enumerate([s for s in all_shapes if s['type'] == 'line']) if (i % step == 0)]
@@ -142,16 +148,21 @@ if uploaded_file is not None:
             ]
             return rects + lines, header_annotations + filtered_annots
 
-        # 드롭다운 버튼 설정 (기존 유지)
         zoom_buttons = [dict(method="relayout", label="전체 보기", args=[{"xaxis.autorange": True}])]
         for i in range(total_cycles):
             s, e = cycle_times_min[i], (cycle_times_min[i+1] if i < total_cycles-1 else df_plot['Elapsed_Min'].max())
             zoom_buttons.append(dict(method="relayout", label=f"Cycle {i+1}", args=[{"xaxis.range": [s-5, e+5]}]))
 
         y_tick_buttons = [dict(method="relayout", label=f"{val}도", args=[{"yaxis.dtick": val}]) for val in [5, 10, 20, 50]]
-        step_buttons = [dict(method="relayout", label=f"{step}개씩", args=[{"shapes": get_filtered_layout(step)[0], "annotations": get_filtered_layout(step)[1]}]) for step in [1, 5, 10, 20, 50]]
+        
+        step_buttons = []
+        for step in [1, 5, 10, 20, 50]:
+            shapes_f, annots_f = get_filtered_layout(step)
+            step_buttons.append(dict(method="relayout", label=f"{step}개씩", args=[{"shapes": shapes_f, "annotations": annots_f}]))
 
-        # 그래프 그리기
+        # -----------------------------------------------------------------------
+        # 6. 그래프 생성 및 레이아웃 설정
+        # -----------------------------------------------------------------------
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_plot['Elapsed_Min'], y=df_plot['PV'], name='PV', hovertemplate="%{x:.1f}분<br>%{y}도"))
         fig.add_trace(go.Scatter(x=df_plot['Elapsed_Min'], y=df_plot['SP'], name='SP', line=dict(dash='dash'), hoverinfo='skip'))
@@ -159,17 +170,17 @@ if uploaded_file is not None:
         init_shapes, init_annots = get_filtered_layout(1)
 
         fig.update_layout(
-            title=dict(text=f"결과 그래프: {uploaded_file.name}", x=0.5, y=0.98),
-            shapes=init_shapes, annotations=init_annots,
-            yaxis=dict(range=[y_min_input, y_max_input], dtick=10),
-            # [수정 포인트] 사이드바 입력값을 xaxis range에 적용
+            title=dict(text=f"분석 결과: {uploaded_file.name}", x=0.5, y=0.98),
+            shapes=init_shapes, 
+            annotations=init_annots,
+            yaxis=dict(range=[y_min_input, y_max_input], tickmode='linear', dtick=10),
             xaxis=dict(
                 title="경과 시간 (분)", 
-                range=[x_min_range, x_max_range], 
+                range=[x_min_range, x_max_range], # 사이드바 구간 설정 반영
                 dtick=time_tick_input if time_tick_input > 0 else None, 
                 rangeslider=dict(visible=True, thickness=0.05)
             ),
-            template='plotly_white', hovermode='x unified', height=700, margin=dict(t=160),
+            template='plotly_white', hovermode='x unified', height=750, margin=dict(t=160),
             updatemenus=[
                 dict(type="dropdown", direction="down", x=0.0, y=1.08, buttons=zoom_buttons),
                 dict(type="dropdown", direction="down", x=0.35, y=1.08, buttons=y_tick_buttons),
@@ -182,4 +193,4 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"오류가 발생했습니다: {e}")
 else:
-    st.info("👆 데이터를 분석하려면 엑셀 파일을 업로드해주세요.")
+    st.info("👆 분석할 엑셀 또는 CSV 파일을 업로드해주세요.")
